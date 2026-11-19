@@ -9,11 +9,12 @@ import { api, ApiError, hostKeyFor, rememberHostRoom } from "@/lib/client";
 import { formatCode, minutes, mmss } from "@/lib/format";
 import { ThemeToggle, Wordmark } from "../chrome";
 import { Button, cx, Input, Segmented, Spinner, Tag } from "../ui";
+import { GameView } from "./GameView";
 import { LiveView } from "./LiveView";
 import { ResultsView } from "./ResultsView";
 import { scoreAll, type HostData } from "./types";
 
-type Tab = "live" | "results";
+type Tab = "live" | "game" | "results";
 
 export function RoomClient({ code }: { code: string }) {
   const [hostKey, setHostKey] = useState<string | null>(null);
@@ -135,7 +136,7 @@ export function RoomClient({ code }: { code: string }) {
             </div>
             <p className="text-[12px] text-fg-2">
               <span className="mono tnum text-fg-1">{formatCode(code)}</span>
-              {room.section ? ` · Section ${room.section}` : ""} · {room.slots.length} questions · {room.topics.map((t) => TOPIC_BY_ID[t]?.title).join(", ")}
+              {room.section ? ` · Section ${room.section}` : ""} · {room.slots.length} questions · {topicLine(room.topics.map((t) => TOPIC_BY_ID[t]?.title ?? t), room.custom?.length ?? 0)}
             </p>
           </div>
           <div className="ml-auto flex flex-wrap items-center gap-2">
@@ -205,6 +206,7 @@ export function RoomClient({ code }: { code: string }) {
             onChange={setTab}
             options={[
               { value: "live", label: "Live" },
+              { value: "game", label: "Game and teams" },
               { value: "results", label: "Results and export" },
             ]}
           />
@@ -213,7 +215,9 @@ export function RoomClient({ code }: { code: string }) {
       </header>
 
       <main className="mx-auto w-full max-w-[1600px] flex-1 px-4 py-4">
-        {tab === "live" ? (
+        {tab === "game" ? (
+          <GameView data={data} scored={scored} onAction={(b, l) => void action(b, l)} />
+        ) : tab === "live" ? (
           <LiveView data={data} scored={scored} now={serverNow} hostKey={hostKey} />
         ) : (
           <ResultsView
@@ -261,4 +265,11 @@ function MissingKey({ code, onKey }: { code: string; onKey: (k: string) => void 
       </div>
     </div>
   );
+}
+
+function topicLine(titles: string[], own: number) {
+  const shown = titles.slice(0, 5).join(", ");
+  const more = titles.length > 5 ? ` and ${titles.length - 5} more topics` : "";
+  const mine = own ? `${titles.length ? " · " : ""}${own} own question${own === 1 ? "" : "s"}` : "";
+  return shown + more + mine;
 }

@@ -23,7 +23,8 @@ export interface GradeResult {
  */
 export interface Template<P extends { d: Difficulty } = any, S = any> {
   id: string;
-  generate(rng: Rng, d: Difficulty): P;
+  /** `mode` selects a variant for multi-topic templates (e.g. sorter: "layers", "ipclass"). */
+  generate(rng: Rng, d: Difficulty, mode?: string): P;
   solve(p: P): S;
   /** Everything the student is allowed to see. Must not contain derived answers. */
   view(p: P): Record<string, unknown>;

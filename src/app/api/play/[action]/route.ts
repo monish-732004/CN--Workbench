@@ -1,6 +1,6 @@
 import { toRoomPublic } from "@/engine/model";
 import { body, handle } from "@/server/http";
-import { addEvents, begin, check, HttpError, join, normCode, submit, sync, toPublic } from "@/server/service";
+import { addEvents, begin, check, chest, HttpError, join, normCode, profile, studentBoard, submit, sync, toPublic } from "@/server/service";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +32,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ action: string
     if (action === "check") {
       const { verdict } = await check(code, b.regNo, tok, b);
       return { verdict };
+    }
+    if (action === "chest") return chest(code, b.regNo, tok, b);
+    if (action === "board") return studentBoard(code, b.regNo, tok);
+    if (action === "profile") {
+      const { attempt } = await profile(code, b.regNo, tok, b);
+      return { attempt: toPublic(attempt) };
     }
     if (action === "submit") {
       const { attempt, room } = await submit(code, b.regNo, tok, b);

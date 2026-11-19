@@ -9,6 +9,16 @@ import { toBits } from "../src/engine/net";
 import { scoreAttempt } from "../src/engine/scoring";
 import { DEFAULT_SCORING } from "../src/engine/model";
 import { perfectResponse } from "./perfect";
+import { resolveMode, TOPICS } from "../src/engine/catalog";
+import { customAnswer, customKey, generateCustom, gradeCustom, validateCustom } from "../src/engine/custom";
+import { evaluate } from "../src/engine/expr";
+import { stuff, unstuff } from "../src/engine/templates/stuffing";
+import { compressV6, expandV6, eui64 } from "../src/engine/ipv6";
+
+eq("bit stuffing (U4)", stuff("0111111011111100").stuffed, "011111010111110100");
+eq("bit unstuffing", unstuff("1011111001111100").unstuffed, "10111110111110");
+eq("ipv6 compress tie → leftmost", compressV6(expandV6("2001:0DB8:0000:0000:0A40:0000:0000:00F1")!), "2001:db8::a40:0:0:f1");
+eq("eui-64", eui64("00:1A:2B:3C:4D:5E"), "21a:2bff:fe3c:4d5e");
 
 let failures = 0;
 function eq(name: string, got: unknown, want: unknown) {
@@ -59,13 +69,17 @@ eq("bits", toBits(0xa7c7aa52).slice(24), "01010010");
 
 // ── Property tests: the solver's own answer must score 1.0 on every checkpoint ──
 const SEEDS = 300;
-for (const [id, t] of Object.entries(TEMPLATES)) {
+// Every catalogue topic (template + mode) at every difficulty
+const runs = TOPICS.map((tp) => ({ name: tp.mode ? `${tp.template}:${tp.mode}` : tp.template, id: tp.template as string, topic: tp }));
+for (const { name, id, topic } of runs) {
+  const t = TEMPLATES[topic.template];
   for (const d of DIFFICULTIES) {
     const keys = new Set<string>();
+    const mode = resolveMode(topic, d);
     for (let i = 0; i < SEEDS; i++) {
-      const p = t.generate(new Rng(seedFromString(`${id}|${d}|${i}`)), d);
+      const p = t.generate(new Rng(seedFromString(`${name}|${d}|${i}`)), d, mode);
       // Determinism: same seed → same params
-      const p2 = t.generate(new Rng(seedFromString(`${id}|${d}|${i}`)), d);
+      const p2 = t.generate(new Rng(seedFromString(`${name}|${d}|${i}`)), d, mode);
       if (JSON.stringify(p) !== JSON.stringify(p2)) {
         failures++;
         console.log(`FAIL ${id}/${d} non-deterministic at seed ${i}`);
@@ -90,8 +104,36 @@ for (const [id, t] of Object.entries(TEMPLATES)) {
         console.log(`FAIL ${id}/${d} optimalMoves <= 0`);
       }
     }
-    console.log(`${id.padEnd(10)} ${d.padEnd(7)} ok · distinct instances ${keys.size}/${SEEDS}`);
+    console.log(`${name.padEnd(18)} ${d.padEnd(7)} distinct ${keys.size}/${SEEDS}`);
   }
+}
+
+// ── Teacher questions ──
+{
+  const q = validateCustom(
+    { type: "numeric", prompt: "Propagation over {d} km at 2e8 m/s in ms?", vars: [{ name: "d", min: 100, max: 5000, step: 100 }], formula: "d*1000/2e8*1000", tolerance: 0.001, difficulty: "easy" },
+    0,
+  );
+  if (typeof q === "string") {
+    failures++;
+    console.log("FAIL custom validate", q);
+  } else {
+    const keys = new Set<string>();
+    for (let i = 0; i < 100; i++) {
+      const p = generateCustom(q, new Rng(seedFromString(`c${i}`)));
+      keys.add(customKey(p));
+      const ans = customAnswer(p)!;
+      eq(`custom numeric ${i}`, gradeCustom(p, { value: String(ans) }).score, 1);
+      if (i === 0) eq("custom numeric value", ans, (p.vars.d! * 1000 * 1000) / 2e8);
+    }
+    console.log(`custom numeric      distinct ${keys.size}/100`);
+  }
+  const mcq = validateCustom({ type: "mcq", prompt: "Which layer routes?", options: [{ text: "Network", correct: true }, { text: "Transport" }, { text: "Physical" }, { text: "Session" }] }, 1) as any;
+  const pm = generateCustom(mcq, new Rng(seedFromString("m")));
+  eq("custom mcq correct", gradeCustom(pm, { choice: "o0" }).score, 1);
+  eq("custom mcq wrong", gradeCustom(pm, { choice: "o1" }).score, 0);
+  eq("expr", evaluate("2^3 + log2(1024) - max(1, 4) * (3 % 2)", {}), 14);
+  eq("custom rejects bad formula", typeof validateCustom({ type: "numeric", prompt: "x?", formula: "foo(", vars: [] }, 2), "string");
 }
 
 console.log(failures ? `\n${failures} failure(s)` : "\nAll engine checks passed");

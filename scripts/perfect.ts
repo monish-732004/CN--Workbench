@@ -43,5 +43,19 @@ export function perfectResponse(id: string, p: any, s: any, cp: string): any {
       };
     case "ladder":
       return { rows: s.msgs.map((m: any) => ({ type: m.type, dir: m.dir, seq: String(m.seq), ack: m.ack === null ? "" : String(m.ack) })) };
+    case "sorter":
+      return { place: s };
+    case "sequence":
+      return { order: s.map((_: string, i: number) => `s${i}`) };
+    case "form":
+      return { values: Object.fromEntries(Object.entries(s).map(([k, v]) => [k, String(v)])) };
+    case "table":
+      return {
+        cells: Object.fromEntries(
+          p.rows.map((r: any) => [r.id, Object.fromEntries(Object.entries(r.cells).filter(([, c]: any) => "answer" in c).map(([k, c]: any) => [k, String(c.answer)]))]),
+        ),
+      };
+    case "stuffing":
+      return { inserts: s.inserts, removed: s.removed };
   }
 }

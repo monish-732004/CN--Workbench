@@ -160,8 +160,149 @@ async function main() {
   const sB2 = scoreAttempt(h2.attempts.find((a: any) => a.regNo === B), { endAt: h2.room.endAt, excused: h2.room.excused[B], cfg: h2.room.scoring, now: Date.now() });
   ok(Math.abs(sB2.integrity - 0.98) < 1e-9, "excused event no longer counts (I = 0.98)", sB2.integrity);
 
+  // Points from scenario 1: A solved everything, so A leads the board.
+  const board1 = h2.board;
+  ok(h2.points?.[A]?.rank === 1 && h2.points[A].points > 0, "A ranked first on points", h2.points);
+  ok(board1 && board1.top.length === 3 && !board1.top.some((r: any) => "reg" in r), "host board has 3 rows without register numbers", board1?.top);
+
+  await gameScenario();
+
   console.log(failures ? `\n${failures} failure(s)` : "\nAll end-to-end checks passed");
   process.exit(failures ? 1 : 0);
+}
+
+/** Teacher questions, teams, gold rush chests and leaderboards. */
+async function gameScenario() {
+  console.log("\n— game scenario —");
+  const custom = [
+    {
+      id: "arp",
+      type: "mcq",
+      title: "ARP request",
+      prompt: "An ARP request is sent to which MAC address?",
+      difficulty: "easy",
+      unit: 2,
+      options: [
+        { text: "FF:FF:FF:FF:FF:FF", correct: true },
+        { text: "Gateway MAC", correct: false },
+        { text: "00:00:00:00:00:00", correct: false },
+        { text: "01:00:5E:00:00:01", correct: false },
+      ],
+    },
+    {
+      id: "tx",
+      type: "numeric",
+      title: "Transmission delay",
+      prompt: "A {L} byte frame on a {R} Mbps link. Transmission delay in µs?",
+      difficulty: "medium",
+      unit: 1,
+      vars: [
+        { name: "L", min: 500, max: 1500, step: 100 },
+        { name: "R", min: 10, max: 100, step: 10 },
+      ],
+      formula: "L * 8 / R",
+      tolerance: 0.5,
+      unitLabel: "µs",
+    },
+    { id: "hs", type: "order", title: "Handshake", prompt: "Order the TCP handshake.", difficulty: "easy", unit: 5, steps: ["SYN", "SYN + ACK", "ACK"] },
+    { id: "osi", type: "text", title: "OSI layer", prompt: "Which layer does routing?", difficulty: "easy", unit: 1, accepted: ["Network", "Layer 3"] },
+  ];
+  const bad = await call("/api/rooms", { title: "bad", topics: [], custom: [{ type: "mcq", prompt: "No options", options: [] }] });
+  ok(bad.status === 400, "invalid teacher question rejected", bad.data);
+
+  const create = await call("/api/rooms", {
+    title: "Game check",
+    topics: [],
+    mix: { easy: 0, medium: 0, hard: 0 },
+    durationMode: "1.5",
+    lateMode: "flag",
+    graceMin: 5,
+    feedback: "binary",
+    game: { mode: "gold", leaderboard: true, teams: 2 },
+    custom,
+  });
+  ok(create.status === 200, "create custom-only gold room with 2 teams", create.data);
+  const code: string = create.data.code;
+  const host = { "x-host-key": create.data.hostKey };
+  ok((await call(`/api/rooms/${code}`)).data.items === 4, "custom-only room has 4 questions");
+
+  const regs = ["RA2311003010101", "RA2311003010102", "RA2311003010103", "RA2311003010104"];
+  const tok: Record<string, string> = {};
+  const teams: number[] = [];
+  for (const [i, r] of regs.entries()) {
+    const j = await call("/api/play/join", { code, regNo: r, name: `Player ${i + 1}` });
+    tok[r] = j.data.token;
+    teams.push(j.data.attempt.team);
+  }
+  ok(JSON.stringify(teams) === "[0,1,0,1]", "teams assigned round-robin", teams);
+  const st = (r: string) => ({ "x-attempt-token": tok[r]! });
+  const [P, Q] = regs as [string, string];
+
+  const prof = await call("/api/play/profile", { code, regNo: P, avatar: 7 }, st(P));
+  ok(prof.data.attempt?.avatar === 7, "avatar saved", prof.data);
+
+  await call(`/api/rooms/${code}/host`, { action: "start" }, host);
+  for (const r of regs) await call("/api/play/begin", { code, regNo: r }, st(r));
+
+  const dP = (await call(`/api/rooms/${code}/host/attempt?reg=${P}`, undefined, host)).data;
+  const dQ = (await call(`/api/rooms/${code}/host/attempt?reg=${Q}`, undefined, host)).data;
+  const numP = dP.items.find((it: any) => it.params.q.id === "tx");
+  const numQ = dQ.items.find((it: any) => it.params.q.id === "tx");
+  ok(JSON.stringify(numP.params.vars) !== JSON.stringify(numQ.params.vars), "numeric question values differ per student", [numP.params.vars, numQ.params.vars]);
+  const mcqP = dP.items.find((it: any) => it.params.q.id === "arp");
+  const mcqQ = dQ.items.find((it: any) => it.params.q.id === "arp");
+  ok(mcqP.params.order.join() !== mcqQ.params.order.join() || numP.params.order.join() !== numQ.params.order.join(), "option order differs per student");
+  const pubP = (await call("/api/play/state", { code, regNo: P }, st(P))).data.attempt;
+  ok(!JSON.stringify(pubP).includes("correct\":true") && !JSON.stringify(pubP).includes("formula"), "student payload hides answers and formula");
+
+  const answer = (it: any) => {
+    const q = it.params.q;
+    if (q.type === "mcq") return { choice: `o${q.options.findIndex((o: any) => o.correct)}` };
+    if (q.type === "numeric") return { value: String((it.params.vars.L * 8) / it.params.vars.R) };
+    if (q.type === "order") return { order: q.steps.map((_: string, i: number) => `s${i}`) };
+    return { text: " network " };
+  };
+
+  let totalPts = 0;
+  let chestsOpened = 0;
+  for (const it of dP.items) {
+    await sleep(1250);
+    const res = await call("/api/play/check", { code, regNo: P, itemIndex: it.index, checkpointId: "answer", response: answer(it) }, st(P));
+    const v = res.data.verdict;
+    ok(v?.status === "correct" && v.award?.points > 0, `custom ${it.params.q.type} correct with points`, res.data);
+    if (!v?.chest) continue;
+    if (chestsOpened === 0) {
+      await sleep(1250);
+      const blocked = await call("/api/play/check", { code, regNo: P, itemIndex: it.index, checkpointId: "answer", response: answer(it) }, st(P));
+      ok(blocked.status === 409, "check blocked while a chest is pending");
+      const stale = await call("/api/play/chest", { code, regNo: P, id: "nope", choice: 0 }, st(P));
+      ok(stale.status === 409, "wrong chest id rejected");
+    }
+    const opened = await call("/api/play/chest", { code, regNo: P, id: v.chest.id, choice: 1 }, st(P));
+    ok(opened.status === 200 && opened.data.result.outcomes.length === 3 && opened.data.result.chosen === 1, "chest opened", opened.data);
+    totalPts = opened.data.result.total;
+    chestsOpened++;
+  }
+  ok(chestsOpened === 4, "gold rush offers a chest after every verified step", chestsOpened);
+
+  // Q gets one right
+  const qi = dQ.items.find((it: any) => it.params.q.type === "text");
+  await call("/api/play/check", { code, regNo: Q, itemIndex: qi.index, checkpointId: "answer", response: { text: "Layer 3" } }, st(Q));
+
+  const bP = (await call("/api/play/board", { code, regNo: P }, st(P))).data;
+  ok(bP.me?.points === totalPts && bP.top.length === 4 && bP.top.filter((r: any) => r.me).length === 1, "student board: own row, top list", bP);
+  ok(bP.teams.length === 2 && bP.teams.every((t: any) => t.members === 2), "two teams of two on the board", bP.teams);
+  ok(!JSON.stringify(bP).includes("RA23110030101"), "student board carries no register numbers");
+
+  // Teacher moves a student, hides the board
+  ok((await call(`/api/rooms/${code}/host`, { action: "team", reg: Q, team: 0 }, host)).status === 200, "teacher moves a student to another team");
+  const bQ = (await call("/api/play/board", { code, regNo: Q }, st(Q))).data;
+  ok(bQ.me?.team === 0 && bQ.teams.find((t: any) => t.index === 0)?.members === 3, "team change reflected", bQ.teams);
+  await call(`/api/rooms/${code}/host`, { action: "leaderboard", visible: false }, host);
+  const hidden = (await call("/api/play/board", { code, regNo: Q }, st(Q))).data;
+  ok(hidden.hidden === true && hidden.top.length === 0 && hidden.me, "hidden board shows only own row", hidden);
+  ok((await call(`/api/rooms/${code}/board`)).status === 403, "projector board needs host key when hidden");
+  ok((await call(`/api/rooms/${code}/board`, undefined, host)).data.top?.length === 4, "projector board with host key");
 }
 
 main().catch((e) => {

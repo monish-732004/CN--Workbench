@@ -1,21 +1,46 @@
 "use client";
 
-import { Check, Clock4, EyeOff, Maximize2, MonitorOff, ShieldCheck } from "lucide-react";
+import { Check, Clock4, EyeOff, HelpCircle, Maximize2, MonitorOff, ShieldCheck, Trophy } from "lucide-react";
 import { motion } from "motion/react";
 import { useState } from "react";
-import type { AttemptPublic, RoomPublic } from "@/engine/model";
+import { avatarSeed, GAME_MODES, TEAMS, type AttemptPublic, type RoomPublic } from "@/engine/model";
 import { formatCode, minutes } from "@/lib/format";
 import { Avatar } from "../Avatar";
 import { Button, cx } from "../ui";
+import { AvatarPicker, GuideSwitch } from "./game";
 
-export function Lobby({ attempt, room, onBegin, busy, fsSupported, error }: { attempt: AttemptPublic; room: RoomPublic; onBegin: () => void; busy: boolean; fsSupported: boolean; error: string | null }) {
+export function Lobby({
+  attempt,
+  room,
+  onBegin,
+  busy,
+  fsSupported,
+  error,
+  guideOn,
+  onGuide,
+  onAvatar,
+}: {
+  attempt: AttemptPublic;
+  room: RoomPublic;
+  onBegin: () => void;
+  busy: boolean;
+  fsSupported: boolean;
+  error: string | null;
+  guideOn: boolean;
+  onGuide: (v: boolean) => void;
+  onAvatar: (v: number) => void;
+}) {
   const [ack, setAck] = useState(false);
+  const team = attempt.team !== null && attempt.team !== undefined ? TEAMS[attempt.team] : null;
+  const mode = GAME_MODES[room.game?.mode ?? "classic"];
   const live = room.phase === "live" || room.phase === "grace";
   return (
     <main className="mx-auto flex min-h-[calc(100dvh-48px)] max-w-[720px] flex-col justify-center px-4 py-10">
       <motion.section initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} className="rounded-lg border border-line bg-bg-1">
         <header className="flex items-center gap-3 border-b border-line px-6 py-5">
-          <Avatar seed={attempt.regNo} size={40} />
+          <motion.div key={attempt.avatar} initial={{ scale: 0.85 }} animate={{ scale: 1 }} transition={{ type: "spring", stiffness: 500, damping: 22 }}>
+            <Avatar seed={avatarSeed(attempt.regNo, attempt.avatar ?? 0)} size={40} />
+          </motion.div>
           <div className="min-w-0">
             <p className="truncate text-[15px] font-semibold">{attempt.name}</p>
             <p className="mono tnum text-[12px] text-fg-2">{attempt.regNo}</p>
@@ -44,6 +69,44 @@ export function Lobby({ attempt, room, onBegin, busy, fsSupported, error }: { at
             ) : (
               <span className="text-fg-2">This room has closed.</span>
             )}
+          </div>
+
+          <div className="mt-6 grid gap-4 sm:grid-cols-[1fr_auto]">
+            <div>
+              <h2 className="text-[13px] font-semibold">Pick your avatar</h2>
+              <p className="mt-0.5 text-[12px] text-fg-3">Shown next to your name on the leaderboard.</p>
+              <div className="mt-2.5">
+                <AvatarPicker reg={attempt.regNo} value={attempt.avatar ?? 0} onChange={onAvatar} />
+              </div>
+            </div>
+            <div className="flex flex-col gap-2 sm:w-[220px]">
+              {team ? (
+                <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} className="rounded-md border border-line px-3 py-2.5" style={{ boxShadow: `inset 3px 0 0 ${team.color}` }}>
+                  <p className="text-[11px] text-fg-3">Your team</p>
+                  <p className="mt-0.5 flex items-center gap-1.5 text-[14px] font-semibold">
+                    <span className="h-2.5 w-2.5 rounded-full" style={{ background: team.color }} />
+                    {team.name}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-fg-3">Your points count toward the team average.</p>
+                </motion.div>
+              ) : null}
+              <div className="rounded-md border border-line px-3 py-2.5">
+                <p className="flex items-center gap-1.5 text-[11px] text-fg-3">
+                  <Trophy size={12} strokeWidth={1.5} /> Game mode
+                </p>
+                <p className="mt-0.5 text-[14px] font-semibold">{mode.label}</p>
+                <p className="mt-0.5 text-[11px] text-fg-3">{mode.blurb}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-5 flex items-start gap-3 rounded-md border border-line bg-bg-2 px-3 py-2.5">
+            <HelpCircle size={15} strokeWidth={1.5} className="mt-0.5 shrink-0 text-signal" />
+            <p className="flex-1 text-[12px] text-fg-2">
+              <span className="font-medium text-fg-1">New to the interface?</span> With the guide on, you get a short tour when you start and a how-to-answer box above every question. Turn it off
+              here, or with the <span className="font-medium text-fg-1">Guide</span> switch in the top bar during the quiz.
+            </p>
+            <GuideSwitch on={guideOn} onChange={onGuide} />
           </div>
 
           <h2 className="mt-6 text-[13px] font-semibold">Before you begin</h2>

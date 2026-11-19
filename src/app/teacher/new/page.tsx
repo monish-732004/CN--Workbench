@@ -1,11 +1,13 @@
 "use client";
 
-import { Check, Minus, Plus } from "lucide-react";
+import { Check, Coins, Flag, Minus, Plus, Trophy, Users } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { TopBar } from "@/components/chrome";
+import { QuestionBuilder, toPayload, useQuestionLibrary, checkQuestion } from "@/components/teacher/QuestionBuilder";
 import { Button, cx, Field, Input, Segmented } from "@/components/ui";
-import { buildSlots, DIFFICULTY_LABEL, estimateSeconds, TOPIC_BY_ID, TOPICS, UNITS } from "@/engine/catalog";
+import { buildSlots, DIFFICULTY_LABEL, estimateSeconds, isCustomSlot, TOPIC_BY_ID, TOPICS, UNITS } from "@/engine/catalog";
+import { GAME_MODES, TEAMS, type GameMode } from "@/engine/model";
 import type { Difficulty } from "@/engine/types";
 import { api, rememberHostRoom } from "@/lib/client";
 import { minutes } from "@/lib/format";
@@ -24,11 +26,17 @@ export default function NewRoom() {
   const [lateMode, setLateMode] = useState<LateMode>("flag");
   const [graceMin, setGraceMin] = useState(10);
   const [feedback, setFeedback] = useState<"binary" | "checkpoint">("binary");
+  const [gameMode, setGameMode] = useState<GameMode>("classic");
+  const [showBoard, setShowBoard] = useState(true);
+  const [teamsOn, setTeamsOn] = useState(false);
+  const [teamCount, setTeamCount] = useState(4);
+  const [lib, setLib] = useQuestionLibrary();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const slots = useMemo(() => buildSlots(topics, mix), [topics, mix]);
-  const est = estimateSeconds(slots);
+  const custom = useMemo(() => lib.filter((q) => q.include && !checkQuestion(q)).map(toPayload), [lib]);
+  const slots = useMemo(() => buildSlots(topics, mix, custom), [topics, mix, custom]);
+  const est = estimateSeconds(slots, custom);
   const durationSec = durationMode === "custom" ? customMin * 60 : Math.ceil((est * Number(durationMode)) / 60) * 60;
   const total = mix.easy + mix.medium + mix.hard;
 
@@ -44,7 +52,19 @@ export default function NewRoom() {
     setError(null);
     try {
       const res = await api<{ code: string; hostKey: string }>("/api/rooms", {
-        body: { title, section, topics, mix, durationMode, customMinutes: customMin, lateMode, graceMin, feedback },
+        body: {
+          title,
+          section,
+          topics,
+          mix: topics.length ? mix : { easy: 0, medium: 0, hard: 0 },
+          durationMode,
+          customMinutes: customMin,
+          lateMode,
+          graceMin,
+          feedback,
+          game: { mode: gameMode, leaderboard: showBoard, teams: teamsOn ? teamCount : 0 },
+          custom,
+        },
       });
       rememberHostRoom({ code: res.code, hostKey: res.hostKey, title: title || "Class quiz", section, createdAt: Date.now() });
       router.push(`/teacher/room/${res.code}`);
@@ -129,10 +149,67 @@ export default function NewRoom() {
             </div>
           </section>
 
+          <QuestionBuilder lib={lib} setLib={setLib} />
+
+          <section className="rounded-lg border border-line bg-bg-1">
+            <header className="border-b border-line px-5 py-3">
+              <h2 className="text-[14px] font-semibold">Game</h2>
+              <p className="text-[12px] text-fg-3">Points, leaderboard and teams are for engagement. Marks still come from accuracy and efficiency only.</p>
+            </header>
+            <div className="grid gap-2 px-5 pt-4 sm:grid-cols-3">
+              {(Object.keys(GAME_MODES) as GameMode[]).map((m) => {
+                const on = gameMode === m;
+                const Icon = m === "classic" ? Trophy : m === "gold" ? Coins : Flag;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() => setGameMode(m)}
+                    className={cx("rounded-md border px-3 py-2.5 text-left transition-colors", on ? "border-signal/60 bg-signal-bg" : "border-line hover:bg-bg-3")}
+                  >
+                    <span className="flex items-center gap-1.5 text-[13px] font-medium">
+                      <Icon size={14} strokeWidth={1.5} className={on ? "text-signal" : "text-fg-3"} />
+                      {GAME_MODES[m].label}
+                    </span>
+                    <span className="mt-0.5 block text-[12px] text-fg-2">{GAME_MODES[m].blurb}</span>
+                  </button>
+                );
+              })}
+            </div>
+            <div className="grid gap-4 px-5 py-4 sm:grid-cols-2">
+              <ToggleRow on={showBoard} onChange={setShowBoard} title="Show leaderboard to students" text="Top 10, each student's own rank and team standings, updated after every check. Off: students see only their own points." />
+              <div>
+                <ToggleRow on={teamsOn} onChange={setTeamsOn} title="Team mode" text="Students are split into teams as they join. A team's score is the average of its members, so team size doesn't matter." />
+                {teamsOn ? (
+                  <div className="mt-3 flex flex-wrap items-center gap-3 pl-11">
+                    <div className="inline-flex items-center rounded-md border border-line-strong">
+                      <button type="button" aria-label="Fewer teams" disabled={teamCount <= 2} className="flex h-8 w-8 items-center justify-center text-fg-2 hover:text-fg-1 disabled:opacity-30" onClick={() => setTeamCount((n) => n - 1)}>
+                        <Minus size={14} strokeWidth={1.5} />
+                      </button>
+                      <span className="mono tnum w-8 text-center text-[14px]">{teamCount}</span>
+                      <button type="button" aria-label="More teams" disabled={teamCount >= 8} className="flex h-8 w-8 items-center justify-center text-fg-2 hover:text-fg-1 disabled:opacity-30" onClick={() => setTeamCount((n) => n + 1)}>
+                        <Plus size={14} strokeWidth={1.5} />
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {TEAMS.slice(0, teamCount).map((t) => (
+                        <span key={t.name} className="inline-flex items-center gap-1 rounded-sm border border-line px-1.5 py-0.5 text-[11px] text-fg-2">
+                          <span className="h-2 w-2 rounded-full" style={{ background: t.color }} />
+                          {t.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </section>
+
           <section className="grid gap-5 md:grid-cols-2">
             <div className="rounded-lg border border-line bg-bg-1 p-5">
               <h2 className="text-[14px] font-semibold">Difficulty mix</h2>
-              <p className="text-[12px] text-fg-3">Questions per level · max 15 in total</p>
+              <p className="text-[12px] text-fg-3">Platform questions per level · max 15 in total{topics.length ? "" : " · no topics selected"}</p>
               <div className="mt-4 space-y-2">
                 {(["easy", "medium", "hard"] as Difficulty[]).map((d) => (
                   <div key={d} className="flex items-center gap-3">
@@ -237,7 +314,7 @@ export default function NewRoom() {
           <div className="rounded-lg border border-line bg-bg-1">
             <div className="border-b border-line px-5 py-4">
               <h2 className="text-[14px] font-semibold">Paper</h2>
-              <p className="text-[12px] text-fg-3">Same topics and levels for everyone. Values and order differ per student.</p>
+              <p className="text-[12px] text-fg-3">Same topics and levels for everyone. Values, options and order differ per student.</p>
             </div>
             <ol className="max-h-[46vh] divide-y divide-line overflow-auto">
               {slots.length === 0 ? (
@@ -246,7 +323,16 @@ export default function NewRoom() {
                 slots.map((s, i) => (
                   <li key={i} className="flex items-center gap-3 px-5 py-2 text-[13px]">
                     <span className="mono tnum w-5 text-[11px] text-fg-3">{i + 1}</span>
-                    <span className="min-w-0 flex-1 truncate">{TOPIC_BY_ID[s.topicId]?.title}</span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {isCustomSlot(s) ? (
+                        <>
+                          <span className="mr-1.5 rounded-sm border border-line px-1 text-[10px] text-fg-3">Own</span>
+                          {custom.find((c) => `custom:${c.id}` === s.topicId)?.title}
+                        </>
+                      ) : (
+                        TOPIC_BY_ID[s.topicId]?.title
+                      )}
+                    </span>
                     <span className={cx("text-[11px] font-medium", s.difficulty === "easy" ? "text-cat-3" : s.difficulty === "medium" ? "text-cat-2" : "text-cat-4")}>{DIFFICULTY_LABEL[s.difficulty]}</span>
                   </li>
                 ))
@@ -261,8 +347,20 @@ export default function NewRoom() {
                 <span className="text-fg-2">Session</span>
                 <span className="mono tnum">{minutes(durationSec)}</span>
               </div>
+              <div className="flex justify-between text-[13px]">
+                <span className="text-fg-2">Game</span>
+                <span className="inline-flex items-center gap-1.5">
+                  {GAME_MODES[gameMode].label}
+                  {teamsOn ? (
+                    <span className="inline-flex items-center gap-1 text-fg-2">
+                      · <Users size={13} strokeWidth={1.5} /> {teamCount} teams
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+              {slots.length > 25 ? <p className="text-[12px] text-bad">A room can have at most 25 questions.</p> : null}
               {error ? <p className="text-[12px] text-bad">{error}</p> : null}
-              <Button variant="primary" size="lg" className="w-full" disabled={busy || slots.length === 0} onClick={create}>
+              <Button variant="primary" size="lg" className="w-full" disabled={busy || slots.length === 0 || slots.length > 25} onClick={create}>
                 {busy ? "Creating…" : "Create room"}
               </Button>
               <p className="text-[12px] text-fg-3">The room opens in a waiting state. Start it when the class is ready.</p>
@@ -270,6 +368,27 @@ export default function NewRoom() {
           </div>
         </aside>
       </main>
+    </div>
+  );
+}
+
+function ToggleRow({ on, onChange, title, text }: { on: boolean; onChange: (v: boolean) => void; title: string; text: string }) {
+  return (
+    <div className="flex items-start gap-3">
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-label={title}
+        onClick={() => onChange(!on)}
+        className={cx("relative mt-0.5 h-5 w-8 shrink-0 rounded-full border transition-colors", on ? "border-signal bg-signal" : "border-line-strong bg-bg-3")}
+      >
+        <span className={cx("absolute top-0.5 h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-[left] duration-150", on ? "left-[14px]" : "left-0.5")} />
+      </button>
+      <div>
+        <p className="text-[13px] font-medium">{title}</p>
+        <p className="text-[12px] text-fg-2">{text}</p>
+      </div>
     </div>
   );
 }

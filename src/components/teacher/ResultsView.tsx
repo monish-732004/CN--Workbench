@@ -4,7 +4,7 @@ import { Download, FileSpreadsheet, FileText, RotateCcw, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState, type ReactNode } from "react";
 import { DIFFICULTY_LABEL } from "@/engine/catalog";
-import { DEFAULT_SCORING, INTEGRITY_LABEL, type ScoringConfig } from "@/engine/model";
+import { avatarSeed, DEFAULT_SCORING, INTEGRITY_LABEL, type ScoringConfig } from "@/engine/model";
 import { misconceptionText } from "@/engine/misconceptions";
 import { severity, TE_RULE_TEXT } from "@/engine/scoring";
 import { exportCsv, exportPdf, exportXlsx } from "@/lib/export";
@@ -258,7 +258,7 @@ export function ResultsView({
                   <td className="mono tnum px-3 py-2 text-fg-3">{i + 1}</td>
                   <td className="px-3 py-2">
                     <span className="flex items-center gap-2.5">
-                      <Avatar seed={x.a.regNo} size={26} />
+                      <Avatar seed={avatarSeed(x.a.regNo, x.a.avatar ?? 0)} size={26} />
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{x.a.name}</span>
                         <span className="mono tnum block text-[11px] text-fg-3">{x.a.regNo}</span>
@@ -316,7 +316,7 @@ function StudentDetail({ x, excused, onClose, onExcuse }: { x: Scored; excused: 
   return (
     <>
       <header className="flex items-center gap-3 border-b border-line px-5 py-4">
-        <Avatar seed={x.a.regNo} size={40} presence={x.presence} />
+        <Avatar seed={avatarSeed(x.a.regNo, x.a.avatar ?? 0)} size={40} presence={x.presence} />
         <div className="min-w-0">
           <p className="truncate text-[15px] font-semibold">{x.a.name}</p>
           <p className="mono tnum text-[12px] text-fg-2">{x.a.regNo}</p>

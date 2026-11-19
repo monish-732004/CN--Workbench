@@ -1,4 +1,4 @@
-import type { AttemptSummary, Room, RoomPhase } from "@/engine/model";
+import type { AttemptSummary, Board, Room, RoomPhase } from "@/engine/model";
 import { scoreAttempt, type AttemptScore } from "@/engine/scoring";
 import type { ScoringConfig } from "@/engine/model";
 import type { Presence } from "../Avatar";
@@ -9,6 +9,8 @@ export interface HostData {
   room: HostRoom;
   attempts: AttemptSummary[];
   storage: "redis" | "memory";
+  board?: Board;
+  points?: Record<string, { points: number; rank: number }>;
 }
 
 export interface Scored {

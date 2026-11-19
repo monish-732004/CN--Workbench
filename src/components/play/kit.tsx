@@ -16,6 +16,8 @@ export interface Verdict {
   wrong: number;
   checksLeft: number;
   locked: boolean;
+  award?: { points: number; parts: string[]; streak: number; total: number };
+  chest?: { id: string };
 }
 
 export interface TplProps<V = any, D = any> {
@@ -108,7 +110,7 @@ export function CheckpointBar({
         {hint ? <span className="text-[12px] text-fg-3">{hint}</span> : null}
         {!state.correct && !locked ? <span className="mono tnum text-[11px] text-fg-3">{left} check{left === 1 ? "" : "s"} left</span> : null}
         {!state.correct && !locked ? (
-          <Button size="sm" variant="primary" disabled={!ready || pending || !!tp.pending} onClick={() => tp.check(id, getResponse())}>
+          <Button data-tour-check size="sm" variant="primary" disabled={!ready || pending || !!tp.pending} onClick={() => tp.check(id, getResponse())}>
             {pending ? <Spinner /> : null}
             {pending ? "Checking" : "Check"}
           </Button>

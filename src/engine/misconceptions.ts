@@ -60,6 +60,46 @@ export const MISCONCEPTION_TEXT: Record<string, string> = {
   "tcp.data-seq-from-isn": "First data byte numbered from the ISN instead of ISN + 1",
   "tcp.fin-no-seq": "Forgot the FIN consumes one sequence number",
   "tcp.close-order": "Wrong order of connection-termination segments",
+  // Sorting
+  "sort.nettypes": "Mixed up LAN, MAN and WAN characteristics",
+  "sort.switching": "Confused circuit, packet and message switching",
+  "sort.layers": "Placed a function or protocol in the wrong layer",
+  "sort.media": "Assigned a medium or frequency band to the wrong category",
+  "sort.ipclass": "Classified an IPv4 address into the wrong class",
+  "sort.protocols": "Placed a routing protocol in the wrong family",
+  "sort.mactype": "Confused random-access, controlled-access and channelization methods",
+  "sort.ports": "Wrong port range or transport protocol for a service",
+  // Sequences
+  "seq.dns": "Wrong order of DNS resolution steps",
+  "seq.smtp": "Wrong order of SMTP commands and replies",
+  "seq.ftp": "Wrong order of FTP control and data connection steps",
+  "seq.ppp": "Wrong order of PPP link phases",
+  "seq.hdlc": "Wrong order of HDLC frame exchange",
+  // Calculation forms
+  "form.topology": "Miscounted links, ports or cables for a topology",
+  "form.flsm": "Fixed-length subnetting error (subnet bits, block size or ranges)",
+  "form.supernet": "Supernet aggregation error (common prefix or block alignment)",
+  "form.domains": "Miscounted collision or broadcast domains",
+  "form.ipv6": "IPv6 compression, expansion or address-type error",
+  "form.mcast": "Multicast address mapping or range error",
+  "form.aloha": "ALOHA throughput or vulnerable-time error",
+  "form.csma": "CSMA/CD minimum frame size or timing error",
+  "form.parity": "Parity or checksum computation error",
+  "form.httpftp": "HTTP or FTP connection-count or timing error",
+  "form.windows": "Sliding-window size or sequence-number error",
+  "aloha.vulnerable-time": "Used the wrong vulnerable time (2T for pure, T for slotted ALOHA)",
+  "csmacd.one-way-delay": "Used one-way instead of round-trip propagation delay",
+  // Event tables
+  "table.nat": "NAT translation table error (port reuse or mapping)",
+  "table.stopwait": "Stop-and-wait sequence or acknowledgement error",
+  "table.gbn": "Go-Back-N window, ACK or resend error",
+  "table.sr": "Selective Repeat window, buffer or resend error",
+  "table.bgp": "BGP path-selection or loop-prevention error",
+  "table.maclearn": "Switch MAC learning or forwarding decision error",
+  // Bit stuffing
+  "stuff.after-six-ones": "Stuffed after six 1s instead of five",
+  "stuff.missed": "Missed a place where a 0 must be stuffed",
+  "stuff.unstuff": "Removed the wrong bits when unstuffing",
 };
 
 export function misconceptionText(tag: string): string {

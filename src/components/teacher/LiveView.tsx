@@ -3,7 +3,7 @@
 import { AlertTriangle, Clipboard, Code2, Copy, EyeOff, Minimize2, MonitorOff, MousePointerClick, Printer, ShieldAlert, ShieldCheck } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { useMemo, useState, type ReactNode } from "react";
-import { INTEGRITY_LABEL, type IntegrityType } from "@/engine/model";
+import { avatarSeed, INTEGRITY_LABEL, type IntegrityType } from "@/engine/model";
 import type { Tier } from "@/engine/scoring";
 import { clockTime, mmss, pct, relTime } from "@/lib/format";
 import { Avatar } from "../Avatar";
@@ -132,7 +132,7 @@ export function LiveView({ data, scored, now }: { data: HostData; scored: Scored
                   const done = x.a.items.filter((i) => i.submitted).length;
                   return (
                     <motion.li layout="position" transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }} key={x.a.regNo} className={cx("flex items-center gap-3 border-b border-line px-3 py-2", x.s.tier === "flagged" && "shadow-[inset_2px_0_0_var(--bad)]")}>
-                      <Avatar seed={x.a.regNo} size={30} presence={x.presence} />
+                      <Avatar seed={avatarSeed(x.a.regNo, x.a.avatar ?? 0)} size={30} presence={x.presence} />
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-[13px] font-medium">{x.a.name}</p>
                         <p className="mono tnum truncate text-[11px] text-fg-3">{x.a.regNo}</p>
@@ -175,7 +175,7 @@ export function LiveView({ data, scored, now }: { data: HostData; scored: Scored
                       <motion.li layout="position" transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }} key={x.a.regNo} className="grid grid-cols-[28px_1fr_64px_56px_70px] items-center gap-2 border-b border-line px-3 py-2">
                         <span className={cx("mono tnum text-[12px]", i < 3 ? "text-fg-1" : "text-fg-3")}>{i + 1}</span>
                         <span className="flex min-w-0 items-center gap-2">
-                          <Avatar seed={x.a.regNo} size={24} />
+                          <Avatar seed={avatarSeed(x.a.regNo, x.a.avatar ?? 0)} size={24} />
                           <span className="truncate text-[13px]">{x.a.name}</span>
                           {x.s.teItems ? (
                             <span title={`${x.s.teItems} question(s) with a trial-and-error pattern`} className="shrink-0 text-warn">
@@ -236,7 +236,7 @@ export function LiveView({ data, scored, now }: { data: HostData; scored: Scored
                     {risk.map((x) => (
                       <motion.li layout="position" key={x.a.regNo} className="grid grid-cols-[1fr_74px_40px_repeat(4,28px)] items-center gap-1.5 border-b border-line px-3 py-1.5">
                         <span className="flex min-w-0 items-center gap-2">
-                          <Avatar seed={x.a.regNo} size={22} presence={x.presence} />
+                          <Avatar seed={avatarSeed(x.a.regNo, x.a.avatar ?? 0)} size={22} presence={x.presence} />
                           <span className="truncate text-[12px]">{x.a.name}</span>
                           {x.outOfFullscreen ? <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-bad" title="Out of full screen right now" /> : null}
                         </span>

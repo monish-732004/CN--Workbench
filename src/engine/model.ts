@@ -1,5 +1,94 @@
 import type { Slot } from "./catalog";
+import type { CustomQuestion } from "./custom";
 import type { CheckpointDef, Difficulty } from "./types";
+
+// ───────── Game layer (points, modes, teams). Points never affect marks. ─────────
+export type GameMode = "classic" | "gold" | "race";
+
+export interface GameSettings {
+  mode: GameMode;
+  /** Show the live leaderboard to students. */
+  leaderboard: boolean;
+  /** 0 = individual; otherwise number of teams (2–8). */
+  teams: number;
+}
+
+export const GAME_MODES: Record<GameMode, { label: string; blurb: string }> = {
+  classic: { label: "Classic", blurb: "Points for every verified step, with first-try, speed and streak bonuses." },
+  gold: { label: "Gold rush", blurb: "Each verified step opens three chests: gain, double, or steal points from a rival." },
+  race: { label: "Race", blurb: "A progress race: the leaderboard ranks by verified steps, then by points." },
+};
+
+export const TEAMS = [
+  { name: "Routers", color: "#5B8DEF" },
+  { name: "Switches", color: "#3FA37A" },
+  { name: "Packets", color: "#D6A23E" },
+  { name: "Gateways", color: "#C9705A" },
+  { name: "Firewalls", color: "#9A7FC6" },
+  { name: "Bridges", color: "#4FA3A5" },
+  { name: "Repeaters", color: "#B4864F" },
+  { name: "Hubs", color: "#8A96A8" },
+];
+
+export interface PointsEvent {
+  at: number;
+  item: number;
+  cp: string;
+  pts: number;
+  parts: string[];
+}
+
+export interface AttemptGame {
+  streak: number;
+  best: number;
+  multNext: number;
+  byItem: Record<number, number>;
+  log: PointsEvent[];
+}
+
+export interface ChestOutcome {
+  kind: "gain" | "pct" | "mult" | "lose" | "steal" | "nothing";
+  value: number;
+  label: string;
+}
+
+export interface BoardRow {
+  rank: number;
+  name: string;
+  avatar: string;
+  team: number | null;
+  points: number;
+  progress: number; // 0..1 verified steps
+  finished: boolean;
+  me?: boolean;
+}
+
+export interface TeamRow {
+  index: number;
+  name: string;
+  color: string;
+  members: number;
+  points: number; // average per member
+  total: number;
+  progress: number;
+}
+
+export interface FeedEvent {
+  at: number;
+  kind: "steal" | "finish" | "streak";
+  text: string;
+  to?: string;
+}
+
+export interface Board {
+  mode: GameMode;
+  hidden: boolean;
+  players: number;
+  top: BoardRow[];
+  me: BoardRow | null;
+  teams: TeamRow[];
+  feed: FeedEvent[];
+}
 
 export type IntegrityType =
   | "fullscreen_exit"
@@ -86,12 +175,30 @@ export interface AttemptBase {
   visible: boolean;
   sessions: number;
   device: string;
+  /** Avatar variant chosen in the lobby. */
+  avatar: number;
+  team: number | null;
+  game: AttemptGame;
+  chestPending: boolean;
+  /** Id of the unopened chest (its outcomes stay server-side). */
+  chestId?: string;
 }
 
 export interface Attempt extends AttemptBase {
   token: string;
   items: AttemptItemServer[];
+  chest?: { id: string; outcomes: ChestOutcome[] };
 }
+
+/** Avatar seed. Hashed so the leaderboard never reveals a register number. */
+export const avatarSeed = (regNo: string, variant: number) => {
+  let h = 0x811c9dc5;
+  for (const ch of `${regNo}:${variant}`) {
+    h ^= ch.charCodeAt(0);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `a${h.toString(36)}`;
+};
 
 /** What a student receives about their own attempt. */
 export interface AttemptPublic extends AttemptBase {
@@ -146,6 +253,9 @@ export interface Room {
   maxChecks: number;
   scoring: ScoringConfig;
   excused: Record<string, string[]>;
+  game: GameSettings;
+  custom: CustomQuestion[];
+  teamOverrides: Record<string, number>;
 }
 
 export type RoomPhase = "waiting" | "live" | "grace" | "closed";
@@ -174,6 +284,7 @@ export interface RoomPublic {
   feedback: Room["feedback"];
   lateMode: LatePolicy["mode"];
   serverNow: number;
+  game: GameSettings;
 }
 
 export function toRoomPublic(room: Room, now: number): RoomPublic {
@@ -191,5 +302,6 @@ export function toRoomPublic(room: Room, now: number): RoomPublic {
     feedback: room.feedback,
     lateMode: room.late.mode,
     serverNow: now,
+    game: room.game ?? { mode: "classic", leaderboard: true, teams: 0 },
   };
 }

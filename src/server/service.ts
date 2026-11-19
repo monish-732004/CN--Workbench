@@ -1,7 +1,9 @@
-import { buildSlots, estimateSeconds, TOPIC_BY_ID } from "@/engine/catalog";
+import { buildSlots, estimateSeconds, isCustomSlot, resolveMode, slotSeconds, TOPIC_BY_ID } from "@/engine/catalog";
+import { customCheckpoints, customKey, customMoves, customView, generateCustom, gradeCustom, validateCustom, type CustomParams, type CustomQuestion } from "@/engine/custom";
 import {
   DEFAULT_SCORING,
   roomPhase,
+  type GameMode,
   type Attempt,
   type AttemptItemServer,
   type AttemptPublic,
@@ -15,6 +17,7 @@ import { TEMPLATES } from "@/engine/registry";
 import { Rng } from "@/engine/rng";
 import type { Difficulty } from "@/engine/types";
 import { roomCode, safeEqual, seedFor, sha256, token } from "./crypto";
+import { awardCheck, computeBoard, emptyGame, ensureGame, kSeq, offerChest, openChest, pointsOf, recordFinish, writeMeta } from "./game";
 import { store } from "./store";
 
 const TTL = 60 * 60 * 24 * 21; // 21 days
@@ -63,20 +66,37 @@ export interface CreateRoomInput {
   lateMode: Room["late"]["mode"];
   graceMin?: number;
   feedback: Room["feedback"];
+  game?: { mode?: GameMode; leaderboard?: boolean; teams?: number };
+  custom?: unknown[];
 }
 
 export async function createRoom(input: CreateRoomInput) {
   const topics = (input.topics ?? []).filter((t) => TOPIC_BY_ID[t]);
-  if (topics.length === 0) throw new HttpError(400, "Choose at least one topic.");
-  const mix = {
-    easy: clampInt(input.mix?.easy, 0, 10),
-    medium: clampInt(input.mix?.medium, 0, 10),
-    hard: clampInt(input.mix?.hard, 0, 10),
-  };
-  const slots = buildSlots(topics, mix);
+  const custom: CustomQuestion[] = [];
+  for (const [i, raw] of (Array.isArray(input.custom) ? input.custom.slice(0, 20) : []).entries()) {
+    const q = validateCustom(raw, i);
+    if (typeof q === "string") throw new HttpError(400, q);
+    if (custom.some((c) => c.id === q.id)) q.id = `${q.id}_${i}`;
+    custom.push(q);
+  }
+  if (topics.length === 0 && custom.length === 0) throw new HttpError(400, "Choose at least one topic or add your own questions.");
+  const mix = topics.length
+    ? {
+        easy: clampInt(input.mix?.easy, 0, 10),
+        medium: clampInt(input.mix?.medium, 0, 10),
+        hard: clampInt(input.mix?.hard, 0, 10),
+      }
+    : { easy: 0, medium: 0, hard: 0 };
+  const slots = buildSlots(topics, mix, custom);
   if (slots.length === 0) throw new HttpError(400, "Add at least one question.");
-  if (slots.length > 15) throw new HttpError(400, "Keep a room to 15 questions or fewer.");
-  const estimatedSec = estimateSeconds(slots);
+  if (slots.length > 25) throw new HttpError(400, "Keep a room to 25 questions or fewer.");
+  const estimatedSec = estimateSeconds(slots, custom);
+  const gm = input.game?.mode;
+  const game = {
+    mode: (gm === "gold" || gm === "race" ? gm : "classic") as GameMode,
+    leaderboard: input.game?.leaderboard !== false,
+    teams: input.game?.teams ? clampInt(input.game.teams, 2, 8) : 0,
+  };
   const mode = input.durationMode === "1.5" || input.durationMode === "custom" ? input.durationMode : "1.25";
   const durationSec =
     mode === "custom" ? clampInt(input.customMinutes, 5, 240) * 60 : Math.ceil((estimatedSec * Number(mode)) / 60) * 60;
@@ -106,15 +126,26 @@ export async function createRoom(input: CreateRoomInput) {
       late: { ...DEFAULT_SCORING.late, mode: input.lateMode === "penalise" ? "penalise" : "none" },
     },
     excused: {},
+    game,
+    custom,
+    teamOverrides: {},
   };
   await store().set(kRoom(code), room, TTL);
   return { code, hostKey };
 }
 
+/** Rooms created before the game layer existed. */
+function upgradeRoom(room: Room): Room {
+  room.game ??= { mode: "classic", leaderboard: true, teams: 0 };
+  room.custom ??= [];
+  room.teamOverrides ??= {};
+  return room;
+}
+
 export async function getRoom(code: string): Promise<Room> {
   const room = await store().get<Room>(kRoom(code));
   if (!room) throw new HttpError(404, "No room with that code. Check the code on the projector.");
-  return room;
+  return upgradeRoom(room);
 }
 
 export async function hostRoom(code: string, hostKey: string | null): Promise<Room> {
@@ -148,6 +179,16 @@ export async function hostAction(room: Room, body: any) {
     }
     case "scoring": {
       room.scoring = sanitizeScoring(body.scoring);
+      break;
+    }
+    case "team": {
+      if (!room.game.teams) throw new HttpError(409, "This room is not in team mode.");
+      const reg = normReg(body.reg);
+      room.teamOverrides[reg] = clampInt(body.team, 0, room.game.teams - 1);
+      break;
+    }
+    case "leaderboard": {
+      room.game.leaderboard = !!body.visible;
       break;
     }
     case "excuse": {
@@ -208,13 +249,43 @@ async function buildItems(room: Room, reg: string): Promise<AttemptItemServer[]>
   const items: AttemptItemServer[] = [];
   for (let slot = 0; slot < room.slots.length; slot++) {
     const s = room.slots[slot]!;
+    if (isCustomSlot(s)) {
+      const q = room.custom.find((c) => `custom:${c.id}` === s.topicId);
+      if (!q) continue;
+      let params = generateCustom(q, new Rng(seedFor(room.code, reg, slot, 0)));
+      for (let n = 1; n <= 12; n++) {
+        if (await store().sadd(kUsed(room.code, slot), customKey(params), TTL)) break;
+        params = generateCustom(q, new Rng(seedFor(room.code, reg, slot, n)));
+      }
+      const cps = customCheckpoints();
+      items.push({
+        index: 0,
+        slot,
+        topicId: s.topicId,
+        templateId: "custom",
+        difficulty: s.difficulty,
+        title: q.title,
+        expectedSec: slotSeconds(s, room.custom),
+        optimalMoves: customMoves(params),
+        checkpoints: cps,
+        view: customView(params),
+        cp: Object.fromEntries(cps.map((c) => [c.id, { score: 0, checks: 0, wrong: 0, correct: false, locked: false, misconceptions: [] }])),
+        stats: { activeMs: 0, moves: 0, undos: 0, resets: 0, maxOscillation: 0, checkLog: [] },
+        submitted: false,
+        params,
+        solution: null,
+        key: customKey(params),
+      });
+      continue;
+    }
     const topic = TOPIC_BY_ID[s.topicId]!;
     const tpl = TEMPLATES[topic.template];
-    let params = tpl.generate(new Rng(seedFor(room.code, reg, slot, 0)), s.difficulty);
+    const mode = resolveMode(topic, s.difficulty);
+    let params = tpl.generate(new Rng(seedFor(room.code, reg, slot, 0)), s.difficulty, mode);
     // Room-level uniqueness: retry with fresh seeds until this instance is unused in this room.
     for (let n = 1; n <= 12; n++) {
       if (await store().sadd(kUsed(room.code, slot), tpl.key(params), TTL)) break;
-      params = tpl.generate(new Rng(seedFor(room.code, reg, slot, n)), s.difficulty);
+      params = tpl.generate(new Rng(seedFor(room.code, reg, slot, n)), s.difficulty, mode);
     }
     const solution = tpl.solve(params);
     const cps = tpl.checkpoints(params);
@@ -254,6 +325,7 @@ export async function join(code: string, regRaw: unknown, nameRaw: unknown, devi
     if (now - existing.lastSeen < 20_000 && existing.status !== "submitted") {
       existing.integrity.push({ id: token(6), type: "multi_session", at: now });
     }
+    ensureGame(existing);
     existing.token = token();
     existing.sessions += 1;
     existing.device = device.slice(0, 160);
@@ -276,9 +348,14 @@ export async function join(code: string, regRaw: unknown, nameRaw: unknown, devi
     sessions: 1,
     device: device.slice(0, 160),
     items: await buildItems(room, reg),
+    avatar: 0,
+    team: room.game.teams ? ((await store().incr(kSeq(code), TTL)) - 1) % room.game.teams : null,
+    game: emptyGame(),
+    chestPending: false,
   };
   await saveAttempt(attempt);
   await store().sadd(kRoster(code), reg, TTL);
+  await writeMeta(attempt);
   return { attempt, room };
 }
 
@@ -301,17 +378,23 @@ export async function loadAttempt(code: string, regRaw: unknown, tok: string | n
   const [room, a] = await Promise.all([getRoom(code), store().get<Attempt>(kAttempt(code, reg))]);
   if (!a) throw new HttpError(404, "Join the room first.");
   if (!tok || !safeEqual(tok, a.token)) throw new HttpError(401, "This session was replaced by a newer login for the same register number.");
-  if (settle(a, room, Date.now())) await saveAttempt(a);
+  ensureGame(a);
+  if (room.teamOverrides[a.regNo] !== undefined) a.team = room.teamOverrides[a.regNo]!;
+  if (settle(a, room, Date.now())) {
+    await saveAttempt(a);
+    await writeMeta(a);
+  }
   return { room, attempt: a };
 }
 
 export function toPublic(a: Attempt): AttemptPublic {
-  const { token: _t, items, ...rest } = a;
-  return { ...rest, items: items.map(({ params: _p, solution: _s, key: _k, ...it }) => it) };
+  const { token: _t, items, chest, ...rest } = a;
+  return { ...rest, chestId: a.chestPending ? chest?.id : undefined, items: items.map(({ params: _p, solution: _s, key: _k, ...it }) => it) };
 }
 
 export function toSummary(a: Attempt): AttemptSummary {
-  const { token: _t, items, ...rest } = a;
+  ensureGame(a);
+  const { token: _t, items, chest: _c, ...rest } = a;
   return { ...rest, items: items.map(({ params: _p, solution: _s, key: _k, view: _v, ...it }) => it) };
 }
 
@@ -418,9 +501,13 @@ export async function check(code: string, reg: unknown, tok: string | null, body
   if (last && now - last.at < 1200) throw new HttpError(429, "Wait a moment before checking again.");
   applyStats(attempt, body?.stats);
 
-  const tpl = TEMPLATES[item.templateId as keyof typeof TEMPLATES];
-  const res = tpl.grade(item.params as any, item.solution, cpId, body?.response);
+  if (attempt.chestPending) throw new HttpError(409, "Open a chest first.");
+  const res =
+    item.templateId === "custom"
+      ? gradeCustom(item.params as CustomParams, body?.response)
+      : TEMPLATES[item.templateId as keyof typeof TEMPLATES].grade(item.params as any, item.solution, cpId, body?.response);
   const score = Math.max(0, Math.min(1, res.score));
+  const wrongBefore = cp.wrong;
   cp.checks += 1;
   if (score < 1) cp.wrong += 1;
   cp.score = score;
@@ -430,10 +517,14 @@ export async function check(code: string, reg: unknown, tok: string | null, body
   item.stats.checkLog.push({ at: now, moves: item.stats.moves, correct: cp.correct });
   if (item.stats.checkLog.length > 60) item.stats.checkLog = item.stats.checkLog.slice(-60);
   attempt.lastSeen = now;
+  const award = await awardCheck(room, attempt, item, cpId, cp, score, wrongBefore);
+  if (cp.correct && room.game.mode === "gold") offerChest(attempt);
   await saveAttempt(attempt);
   return {
     attempt,
     verdict: {
+      award,
+      chest: attempt.chestPending ? { id: attempt.chest!.id } : undefined,
       checkpointId: cpId,
       status: cp.correct ? "correct" : score > 0 && room.feedback === "checkpoint" ? "partial" : "incorrect",
       score: room.feedback === "checkpoint" ? score : undefined,
@@ -454,6 +545,8 @@ export async function submit(code: string, reg: unknown, tok: string | null, bod
     attempt.items.forEach((it) => (it.submitted = true));
     attempt.status = "submitted";
     attempt.submittedAt = Date.now();
+    attempt.chestPending = false;
+    attempt.chest = undefined;
   } else {
     const it = attempt.items[Number(body?.itemIndex)];
     if (!it) throw new HttpError(400, "Unknown question.");
@@ -461,10 +554,44 @@ export async function submit(code: string, reg: unknown, tok: string | null, bod
     Object.values(it.cp).forEach((c) => (c.locked = true));
   }
   await saveAttempt(attempt);
+  if (attempt.status === "submitted") await recordFinish(room, attempt);
+  else await writeMeta(attempt);
   return { room, attempt };
 }
 
 // ───────────────────────── Teacher views ─────────────────────────
+
+export async function chest(code: string, reg: unknown, tok: string | null, body: any) {
+  const { room, attempt } = await loadAttempt(code, reg, tok);
+  if (!attempt.chestPending || !attempt.chest) throw new HttpError(409, "No chest to open.");
+  if (String(body?.id) !== attempt.chest.id) throw new HttpError(409, "That chest has already been opened.");
+  const result = await openChest(room, attempt, Number(body?.choice));
+  await saveAttempt(attempt);
+  return { result };
+}
+
+export async function profile(code: string, reg: unknown, tok: string | null, body: any) {
+  const { attempt } = await loadAttempt(code, reg, tok);
+  attempt.avatar = clampInt(body?.avatar, 0, 11);
+  await saveAttempt(attempt);
+  await writeMeta(attempt);
+  return { attempt };
+}
+
+export async function studentBoard(code: string, reg: unknown, tok: string | null) {
+  const { room, attempt } = await loadAttempt(code, reg, tok);
+  return computeBoard(room, attempt.regNo);
+}
+
+export async function publicBoard(room: Room, isHost: boolean) {
+  if (!isHost && room.game.leaderboard === false) throw new HttpError(403, "The leaderboard is hidden for this room.");
+  const { all: _all, ...board } = await computeBoard(room, null, { full: isHost });
+  return board;
+}
+
+export async function hostBoard(room: Room) {
+  return computeBoard(room, null, { full: true });
+}
 
 export async function roster(room: Room) {
   const regs = await store().smembers(kRoster(room.code));

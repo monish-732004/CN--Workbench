@@ -1,6 +1,6 @@
 import { roomPhase, type Room } from "@/engine/model";
 import { body, handle } from "@/server/http";
-import { hostAction, hostRoom, normCode, roster, storeKind } from "@/server/service";
+import { hostAction, hostBoard, hostRoom, normCode, roster, storeKind } from "@/server/service";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +14,9 @@ export async function GET(req: Request, ctx: { params: Promise<{ code: string }>
   return handle(async () => {
     const { code } = await ctx.params;
     const room = await hostRoom(normCode(code), req.headers.get("x-host-key"));
-    return { room: hostView(room), attempts: await roster(room), storage: storeKind() };
+    const [attempts, board] = await Promise.all([roster(room), hostBoard(room)]);
+    const points = Object.fromEntries((board.all ?? []).map((r) => [r.reg, { points: r.points, rank: r.rank }]));
+    return { room: hostView(room), attempts, storage: storeKind(), board: { ...board, all: undefined }, points };
   });
 }
 
